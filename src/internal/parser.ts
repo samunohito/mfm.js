@@ -805,7 +805,7 @@ export const language = P.createLanguage<TypeTable>({
 			P.regexp(/\[(検索|search)\]/i),
 			P.regexp(/(検索|search)/i),
 		]);
-		return P.seq(
+		const parser = P.seq(
 			newLine.option(),
 			P.lineBegin,
 			P.until(P.alt([
@@ -819,6 +819,15 @@ export const language = P.createLanguage<TypeTable>({
 		).map(result => {
 			const query = result[2];
 			return M.SEARCH(query, `${query}${result[3]}${result[4]}`);
+		});
+		// a search block can only start at a line beginning or at a newline right before it
+		return new P.Parser((input, index, state) => {
+			const current = input.charCodeAt(index);
+			const before = input.charCodeAt(index - 1);
+			if (index !== 0 && !P.isNewLineCode(current) && !P.isNewLineCode(before)) {
+				return P.failure();
+			}
+			return parser.handler(input, index, state);
 		});
 	},
 
