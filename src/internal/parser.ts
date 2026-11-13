@@ -827,6 +827,20 @@ export const language = P.createLanguage<TypeTable>({
 			if (index !== 0 && !P.isNewLineCode(current) && !P.isNewLineCode(before)) {
 				return P.failure();
 			}
+			// the button must be at the end of the line, so the line has to end with `]`, `索` or `h`
+			let lineEnd = index;
+			if (current === 0x0d && input.charCodeAt(index + 1) === 0x0a) {
+				lineEnd += 2;
+			} else if (P.isNewLineCode(current)) {
+				lineEnd++;
+			}
+			while (lineEnd < input.length && !P.isNewLineCode(input.charCodeAt(lineEnd))) {
+				lineEnd++;
+			}
+			const last = input.charCodeAt(lineEnd - 1);
+			if (last !== 0x5d && last !== 0x7d22 && last !== 0x68 && last !== 0x48) {
+				return P.failure();
+			}
 			return parser.handler(input, index, state);
 		});
 	},
