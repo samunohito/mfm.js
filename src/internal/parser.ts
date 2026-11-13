@@ -752,10 +752,33 @@ export const language = P.createLanguage<TypeTable>({
 			),
 			hashTagChar,
 		]));
+		// same as `innerItem` at the top level: a run of `hashTagChar` is consumed at once since the other items cannot start with it
+		const hashTagChars = new P.Parser<string>((input, index, _state) => {
+			let end = index;
+			while (end < input.length && !hashTagStops.includes(input.charAt(end))) {
+				end++;
+			}
+			return (end === index) ? P.failure() : P.success(end, input.slice(index, end));
+		});
+		const topItem: P.Parser<unknown> = P.alt([
+			P.seq(
+				P.str('('), nest(innerItem, hashTagChar).many(0), P.str(')'),
+			),
+			P.seq(
+				P.str('['), nest(innerItem, hashTagChar).many(0), P.str(']'),
+			),
+			P.seq(
+				P.str('「'), nest(innerItem, hashTagChar).many(0), P.str('」'),
+			),
+			P.seq(
+				P.str('（'), nest(innerItem, hashTagChar).many(0), P.str('）'),
+			),
+			hashTagChars,
+		]);
 		const parser = P.seq( 
 			notLinkLabel,
 			mark,
-			innerItem.many(1).text(),
+			topItem.many(1).text(),
 		).select(2);
 		return new P.Parser((input, index, state) => {
 			const result = parser.handler(input, index, state);
@@ -837,10 +860,21 @@ export const language = P.createLanguage<TypeTable>({
 			),
 			urlChar,
 		]));
+		// same as `innerItem` at the top level: a run of `urlChar` is consumed at once since the other items cannot start with it
+		const urlChars = P.regexp(/[.,a-z0-9_/:%#@$&?!~=+-]+/i);
+		const topItem: P.Parser<unknown> = P.alt([
+			P.seq(
+				P.str('('), nest(innerItem, urlChar).many(0), P.str(')'),
+			),
+			P.seq(
+				P.str('['), nest(innerItem, urlChar).many(0), P.str(']'),
+			),
+			urlChars,
+		]);
 		const parser = P.seq(
 			notLinkLabel,
 			P.regexp(/https?:\/\//),
-			innerItem.many(1).text(),
+			topItem.many(1).text(),
 		);
 		return new P.Parser<M.MfmUrl | string>((input, index, state) => {
 			let result;
