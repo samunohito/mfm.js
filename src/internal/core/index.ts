@@ -113,10 +113,11 @@ export class Parser<T> {
 	}
 
 	option(): Parser<T | null> {
-		return alt([
-			this,
-			succeeded(null),
-		]);
+		// same as `alt([this, succeeded(null)])`
+		return new Parser<T | null>((input, index, state) => {
+			const result = this.handler(input, index, state);
+			return result.success ? result : success(index, null);
+		});
 	}
 }
 
@@ -164,10 +165,14 @@ export type SeqParseResult<T extends unknown[]> =
 
 export function seq<Parsers extends Parser<unknown>[]>(...parsers: Parsers): Parser<SeqParseResult<Parsers>> {
 	return new Parser((input, index, state) => {
-		let result;
-		let latestIndex = index;
-		const accum = [];
-		for (let i = 0; i < parsers.length; i++) {
+		// most attempts fail at the first parser, so the array is made after it
+		let result = parsers[0].handler(input, index, state);
+		if (!result.success) {
+			return result;
+		}
+		let latestIndex = result.index;
+		const accum = [result.value];
+		for (let i = 1; i < parsers.length; i++) {
 			result = parsers[i].handler(input, latestIndex, state);
 			if (!result.success) {
 				return result;
@@ -233,12 +238,6 @@ export function first<T>(chars: string, parser: Parser<T>): Parser<T> {
 	guarded.firstChars = chars;
 	guarded.guarded = parser;
 	return guarded;
-}
-
-function succeeded<T>(value: T): Parser<T> {
-	return new Parser((_input, index, _state) => {
-		return success(index, value);
-	});
 }
 
 export function notMatch(parser: Parser<unknown>): Parser<null> {
