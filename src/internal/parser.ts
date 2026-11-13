@@ -12,6 +12,18 @@ const space = P.regexp(/[\u0020\u3000\t]/);
 const alphaAndNum = P.regexp(/[a-z0-9]/i);
 const newLine = P.newline;
 
+/**
+ * Returns true if the UTF-16 code unit can never start an emoji match.
+ * ASCII emoji only start with `#`, `*` or a digit (keycaps), and kana / CJK ideographs are never emoji.
+ * This assumption is checked against `emojiRegex` in test/core.ts.
+ */
+export function cannotStartEmoji(code: number): boolean {
+	if (code < 0x80) {
+		return !(code === 0x23 || code === 0x2a || (code >= 0x30 && code <= 0x39));
+	}
+	return (code >= 0x3041 && code <= 0x30ff) || (code >= 0x4e00 && code <= 0x9fff);
+}
+
 function seqOrText<Parsers extends P.Parser<unknown>[]>(...parsers: Parsers): P.Parser<SeqParseResult<Parsers> | string> {
 	return new P.Parser<SeqParseResult<Parsers> | string>((input, index, state) => {
 		// TODO: typesafe implementation
@@ -478,9 +490,16 @@ export const language = P.createLanguage<TypeTable>({
 
 	unicodeEmoji: () => {
 		const emoji = RegExp(emojiRegex.source);
-		return P.regexp(emoji).map(content => {
+		const parser = P.regexp(emoji).map(content => {
 			// 異体字セレクタ(U+FE0F)の場合は文字として返す
 			return content === '\uFE0F' ? content : M.UNI_EMOJI(content);
+		});
+		// skip the large emoji regexp where no emoji can start
+		return new P.Parser((input, index, state) => {
+			if (cannotStartEmoji(input.charCodeAt(index))) {
+				return P.failure();
+			}
+			return parser.handler(input, index, state);
 		});
 	},
 
