@@ -10,11 +10,7 @@ type Args = Record<string, string | true>;
 
 const space = P.regexp(/[\u0020\u3000\t]/);
 const alphaAndNum = P.regexp(/[a-z0-9]/i);
-const newLine = P.alt([P.crlf, P.cr, P.lf]);
-
-function isNewLineCode(code: number): boolean {
-	return code === 0x0d || code === 0x0a;
-}
+const newLine = P.newline;
 
 /**
  * Returns true if the UTF-16 code unit can never start an emoji match.
@@ -834,7 +830,7 @@ export const language = P.createLanguage<TypeTable>({
 		return new P.Parser((input, index, state) => {
 			const current = input.charCodeAt(index);
 			const before = input.charCodeAt(index - 1);
-			if (index !== 0 && !isNewLineCode(current) && !isNewLineCode(before)) {
+			if (index !== 0 && !P.isNewLineCode(current) && !P.isNewLineCode(before)) {
 				return P.failure();
 			}
 			return parser.handler(input, index, state);
@@ -848,7 +844,7 @@ export const language = P.createLanguage<TypeTable>({
 			return P.failure();
 		}
 		let end = index + 1;
-		if (!isNewLineCode(input.charCodeAt(index))) {
+		if (!P.isNewLineCode(input.charCodeAt(index))) {
 			while (end < input.length && isPlainTextCode(input.charCodeAt(end))) {
 				end++;
 			}
