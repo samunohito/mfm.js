@@ -127,28 +127,27 @@ function trailingLength(text: string, chars: string): number {
 	return length;
 }
 
-const nestable = new P.Parser((_input, index, state) => {
+// whether a nested syntax can be parsed at the current depth
+function nestable(state: Parameters<P.ParserHandler<unknown>>[2]): boolean {
 	// every attempt uses the budget, and nesting stops once it runs out, which bounds the time on crafted input
 	if (state.nestBudget != null) {
 		if (state.nestBudget <= 0) {
-			return P.failure();
+			return false;
 		}
 		state.nestBudget--;
 	}
-	return (state.depth < state.nestLimit)
-		? P.success(index, null)
-		: P.failure();
-});
+	return state.depth < state.nestLimit;
+}
 
 function nest<T>(parser: P.Parser<T>, fallback?: P.Parser<string>): P.Parser<T | string> {
 	// nesting limited? -> No: specified parser, Yes: fallback parser (default = P.char)
-	const inner = P.alt([
-		P.seq(nestable, parser).select(1),
-		fallback ?? P.char,
-	]);
+	const fallbackParser = fallback ?? P.char;
 	return new P.Parser<T | string>((input, index, state) => {
 		state.depth++;
-		const result = inner.handler(input, index, state);
+		let result: P.Result<T | string> = nestable(state) ? parser.handler(input, index, state) : P.failure();
+		if (!result.success) {
+			result = fallbackParser.handler(input, index, state);
+		}
 		state.depth--;
 		return result;
 	});
@@ -417,7 +416,7 @@ export const language = P.createLanguage<TypeTable>({
 		const mark = P.str('***');
 		return seqOrText(
 			mark,
-			P.seq(P.notMatch(mark), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), mark).many(1),
 			mark,
 		).map(result => {
 			if (typeof result === 'string') return result;
@@ -429,7 +428,7 @@ export const language = P.createLanguage<TypeTable>({
 		const mark = P.str('**');
 		return seqOrText(
 			mark,
-			P.seq(P.notMatch(mark), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), mark).many(1),
 			mark,
 		).map(result => {
 			if (typeof result === 'string') return result;
@@ -442,7 +441,7 @@ export const language = P.createLanguage<TypeTable>({
 		const close = P.str('</b>');
 		return seqOrText(
 			open,
-			P.seq(P.notMatch(close), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), close).many(1),
 			close,
 		).map(result => {
 			if (typeof result === 'string') return result;
@@ -464,7 +463,7 @@ export const language = P.createLanguage<TypeTable>({
 		const close = P.str('</small>');
 		return seqOrText(
 			open,
-			P.seq(P.notMatch(close), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), close).many(1),
 			close,
 		).map(result => {
 			if (typeof result === 'string') return result;
@@ -477,7 +476,7 @@ export const language = P.createLanguage<TypeTable>({
 		const close = P.str('</i>');
 		return seqOrText(
 			open,
-			P.seq(P.notMatch(close), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), close).many(1),
 			close,
 		).map(result => {
 			if (typeof result === 'string') return result;
@@ -530,7 +529,7 @@ export const language = P.createLanguage<TypeTable>({
 		const close = P.str('</s>');
 		return seqOrText(
 			open,
-			P.seq(P.notMatch(close), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), close).many(1),
 			close,
 		).map(result => {
 			if (typeof result === 'string') return result;
@@ -542,7 +541,7 @@ export const language = P.createLanguage<TypeTable>({
 		const mark = P.str('~~');
 		return seqOrText(
 			mark,
-			P.seq(P.notMatch(P.alt([mark, newLine])), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), P.alt([mark, newLine])).many(1),
 			mark,
 		).map(result => {
 			if (typeof result === 'string') return result;
@@ -608,7 +607,7 @@ export const language = P.createLanguage<TypeTable>({
 			fnName,
 			args.option(),
 			P.str(' '),
-			P.seq(P.notMatch(fnClose), nest(r.inline)).select(1).many(1),
+			P.except(nest(r.inline), fnClose).many(1),
 			fnClose,
 		).map(result => {
 			if (typeof result === 'string') return result;
