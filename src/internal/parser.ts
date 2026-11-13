@@ -12,6 +12,10 @@ const space = P.regexp(/[\u0020\u3000\t]/);
 const alphaAndNum = P.regexp(/[a-z0-9]/i);
 const newLine = P.alt([P.crlf, P.cr, P.lf]);
 
+function isNewLineCode(code: number): boolean {
+	return code === 0x0d || code === 0x0a;
+}
+
 /**
  * Returns true if the UTF-16 code unit can never start an emoji match.
  * ASCII emoji only start with `#`, `*` or a digit (keycaps), and kana / CJK ideographs are never emoji.
@@ -805,7 +809,7 @@ export const language = P.createLanguage<TypeTable>({
 			P.regexp(/\[(検索|search)\]/i),
 			P.regexp(/(検索|search)/i),
 		]);
-		return P.seq(
+		const parser = P.seq(
 			newLine.option(),
 			P.lineBegin,
 			P.until(P.alt([
@@ -819,6 +823,15 @@ export const language = P.createLanguage<TypeTable>({
 		).map(result => {
 			const query = result[2];
 			return M.SEARCH(query, `${query}${result[3]}${result[4]}`);
+		});
+		// a search block can only start at a line beginning or at a newline right before it
+		return new P.Parser((input, index, state) => {
+			const current = input.charCodeAt(index);
+			const before = input.charCodeAt(index - 1);
+			if (index !== 0 && !isNewLineCode(current) && !isNewLineCode(before)) {
+				return P.failure();
+			}
+			return parser.handler(input, index, state);
 		});
 	},
 
