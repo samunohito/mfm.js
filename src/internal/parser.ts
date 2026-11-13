@@ -14,26 +14,76 @@ const newLine = P.newline;
 
 /**
  * Returns true if the UTF-16 code unit can never start an emoji match.
- * ASCII emoji only start with `#`, `*` or a digit (keycaps), and kana / CJK ideographs are never emoji.
+ * Emoji only start with `#`, `*` or a digit (keycaps), `©`, `®`, U+2000..U+2BFF, a few CJK symbols, surrogates or U+FE0F.
  * This assumption is checked against `emojiRegex` in test/core.ts.
  */
 export function cannotStartEmoji(code: number): boolean {
-	if (code < 0x80) {
-		return !(code === 0x23 || code === 0x2a || (code >= 0x30 && code <= 0x39));
+	if (code < 0x2000) {
+		return !(code === 0x23 || code === 0x2a || (code >= 0x30 && code <= 0x39) || code === 0xa9 || code === 0xae);
 	}
-	return (code >= 0x3001 && code <= 0x3002) || (code >= 0x3041 && code <= 0x30ff) || (code >= 0x4e00 && code <= 0x9fff);
+	if (code < 0x2c00) {
+		return false;
+	}
+	if (code < 0xd800) {
+		return !(code === 0x3030 || code === 0x303d || code === 0x3297 || code === 0x3299);
+	}
+	if (code < 0xe000) {
+		return false;
+	}
+	return !(code === 0xe50a || code === 0xfe0f);
 }
 
 /**
- * Returns true if the UTF-16 code unit is plain text in any context:
- * it neither starts nor closes any syntax (`h` starts a URL), and it cannot start an emoji.
+ * Returns true if an ASCII keycap base (`#`, `*` or a digit) followed by the code unit `next` cannot start an emoji match.
+ * This assumption is checked against `emojiRegex` in test/core.ts.
+ */
+export function cannotStartKeycap(next: number): boolean {
+	return next !== 0xfe0f && next !== 0x20e3;
+}
+
+const enum Ascii {
+	// starts or closes a syntax
+	Special = 0,
+	// plain text in any context
+	Plain = 1,
+	// plain text unless a keycap follows
+	Digit = 2,
+	// plain text unless followed by `t` (`http`)
+	H = 3,
+	// plain text unless followed by `[`
+	Question = 4,
+}
+
+const asciiKinds = new Uint8Array(0x80).fill(Ascii.Plain);
+for (const c of '<*_`\\~$@#:[]\r\n') {
+	asciiKinds[c.charCodeAt(0)] = Ascii.Special;
+}
+for (const c of '0123456789') {
+	asciiKinds[c.charCodeAt(0)] = Ascii.Digit;
+}
+asciiKinds[0x68] = Ascii.H;
+asciiKinds[0x3f] = Ascii.Question;
+
+/**
+ * Returns the end of the run of plain text starting at `index`.
+ * A code unit is plain text in any context if it neither starts nor closes any syntax, and it cannot start an emoji.
  * Newlines are excluded since block syntax can start right after them.
  */
-function isPlainTextCode(code: number): boolean {
-	if ((code >= 0x61 && code <= 0x7a && code !== 0x68) || (code >= 0x41 && code <= 0x5a) || code === 0x20) {
-		return true;
+function plainTextEnd(input: string, index: number): number {
+	let end = index;
+	for (; end < input.length; end++) {
+		const code = input.charCodeAt(end);
+		if (code >= 0x80) {
+			if (!cannotStartEmoji(code)) break;
+			continue;
+		}
+		const kind = asciiKinds[code];
+		if (kind === Ascii.Plain) continue;
+		if (kind === Ascii.Special) break;
+		const next = input.charCodeAt(end + 1);
+		if (kind === Ascii.Digit ? !cannotStartKeycap(next) : kind === Ascii.H ? next === 0x74 : next === 0x5b) break;
 	}
-	return code >= 0x3001 && cannotStartEmoji(code);
+	return end;
 }
 
 function seqOrText<Parsers extends P.Parser<unknown>[]>(...parsers: Parsers): P.Parser<SeqParseResult<Parsers> | string> {
@@ -508,7 +558,8 @@ export const language = P.createLanguage<TypeTable>({
 		});
 		// skip the large emoji regexp where no emoji can start
 		return new P.Parser((input, index, state) => {
-			if (cannotStartEmoji(input.charCodeAt(index))) {
+			const code = input.charCodeAt(index);
+			if (cannotStartEmoji(code) || (code < 0x80 && cannotStartKeycap(input.charCodeAt(index + 1)))) {
 				return P.failure();
 			}
 			return parser.handler(input, index, state);
@@ -857,12 +908,7 @@ export const language = P.createLanguage<TypeTable>({
 		if (index >= input.length) {
 			return P.failure();
 		}
-		let end = index + 1;
-		if (!P.isNewLineCode(input.charCodeAt(index))) {
-			while (end < input.length && isPlainTextCode(input.charCodeAt(end))) {
-				end++;
-			}
-		}
+		const end = P.isNewLineCode(input.charCodeAt(index)) ? index + 1 : plainTextEnd(input, index + 1);
 		return P.success(end, input.slice(index, end));
 	}),
 });
