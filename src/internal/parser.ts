@@ -25,7 +25,19 @@ export function cannotStartEmoji(code: number): boolean {
 	if (code < 0x80) {
 		return !(code === 0x23 || code === 0x2a || (code >= 0x30 && code <= 0x39));
 	}
-	return (code >= 0x3041 && code <= 0x30ff) || (code >= 0x4e00 && code <= 0x9fff);
+	return (code >= 0x3001 && code <= 0x3002) || (code >= 0x3041 && code <= 0x30ff) || (code >= 0x4e00 && code <= 0x9fff);
+}
+
+/**
+ * Returns true if the UTF-16 code unit is plain text in any context:
+ * it neither starts nor closes any syntax (`h` starts a URL), and it cannot start an emoji.
+ * Newlines are excluded since block syntax can start right after them.
+ */
+function isPlainTextCode(code: number): boolean {
+	if ((code >= 0x61 && code <= 0x7a && code !== 0x68) || (code >= 0x41 && code <= 0x5a) || code === 0x20) {
+		return true;
+	}
+	return code >= 0x3001 && cannotStartEmoji(code);
 }
 
 function seqOrText<Parsers extends P.Parser<unknown>[]>(...parsers: Parsers): P.Parser<SeqParseResult<Parsers> | string> {
@@ -835,5 +847,18 @@ export const language = P.createLanguage<TypeTable>({
 		});
 	},
 
-	text: () => P.char,
+	// Every other syntax has already failed at `index`, so the char there is text.
+	// The following plain text code units cannot start or close any syntax either, so they are consumed at once.
+	text: () => new P.Parser((input, index, _state) => {
+		if (index >= input.length) {
+			return P.failure();
+		}
+		let end = index + 1;
+		if (!isNewLineCode(input.charCodeAt(index))) {
+			while (end < input.length && isPlainTextCode(input.charCodeAt(end))) {
+				end++;
+			}
+		}
+		return P.success(end, input.slice(index, end));
+	}),
 });
