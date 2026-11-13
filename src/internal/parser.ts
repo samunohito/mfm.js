@@ -92,6 +92,30 @@ function nest<T>(parser: P.Parser<T>, fallback?: P.Parser<string>): P.Parser<T |
 	});
 }
 
+/**
+ * Guards a block syntax that starts with at most `newLines` optional newlines followed by the char `mark`.
+ */
+function block<T>(newLines: number, mark: string, parser: P.Parser<T>): P.Parser<T> {
+	const markCode = mark.charCodeAt(0);
+	return new P.Parser<T>((input, index, state) => {
+		let start = index;
+		for (let i = 0; i < newLines; i++) {
+			const code = input.charCodeAt(start);
+			if (code === 0x0d) {
+				start += (input.charCodeAt(start + 1) === 0x0a) ? 2 : 1;
+			} else if (code === 0x0a) {
+				start++;
+			} else {
+				break;
+			}
+		}
+		if (input.charCodeAt(start) !== markCode) {
+			return P.failure();
+		}
+		return parser.handler(input, index, state);
+	});
+}
+
 interface TypeTable {
 	fullParser: (M.MfmNode | string)[],
 	simpleParser: (M.MfmSimpleNode | string)[],
@@ -141,7 +165,7 @@ export const language = P.createLanguage<TypeTable>({
 			// Regexp
 			r.unicodeEmoji,
 			// "<center>" block
-			P.first('\r\n<', r.centerTag),
+			P.first('\r\n<', block(1, '<', r.centerTag)),
 			// "<small>"
 			P.first('<', r.smallTag),
 			// "<plain>"
@@ -165,13 +189,13 @@ export const language = P.createLanguage<TypeTable>({
 			// "_"
 			P.first('_', r.italicUnder),
 			// "```" block
-			P.first('\r\n`', r.codeBlock),
+			P.first('\r\n`', block(1, '`', r.codeBlock)),
 			// "`"
 			P.first('`', r.inlineCode),
 			// ">" block
-			P.first('\r\n>', r.quote),
+			P.first('\r\n>', block(2, '>', r.quote)),
 			// "\\[" block
-			P.first('\r\n\\', r.mathBlock),
+			P.first('\r\n\\', block(1, '\\', r.mathBlock)),
 			// "\\("
 			P.first('\\', r.mathInline),
 			// "~~"
