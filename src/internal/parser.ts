@@ -642,10 +642,15 @@ export const language = P.createLanguage<TypeTable>({
 
 	hashtag: () => {
 		const mark = P.str('#');
-		const hashTagChar = P.seq(
-			P.notMatch(P.alt([P.regexp(/[ \u3000\t.,!?'"#:/[\]【】()「」（）<>]/), space, newLine])),
-			P.char,
-		).select(1);
+		// same as `P.seq(P.notMatch(P.alt([P.regexp(/[ \u3000\t.,!?'"#:/[\]【】()「」（）<>]/), space, newLine])), P.char).select(1)`
+		const hashTagStops = ' \u3000\t.,!?\'"#:/[]【】()「」（）<>\r\n';
+		const hashTagChar = new P.Parser<string>((input, index, _state) => {
+			if (index >= input.length) {
+				return P.failure();
+			}
+			const char = input.charAt(index);
+			return hashTagStops.includes(char) ? P.failure() : P.success(index + 1, char);
+		});
 		const innerItem: P.Parser<unknown> = P.lazy(() => P.alt([
 			P.seq(
 				P.str('('), nest(innerItem, hashTagChar).many(0), P.str(')'),
