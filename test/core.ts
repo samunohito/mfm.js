@@ -183,6 +183,14 @@ describe('cannotStartEmoji', () => {
 	});
 });
 
+describe('except', () => {
+	test('match unless the stop matches', () => {
+		const parser = P.except(P.char, P.str('b'));
+		assert.deepStrictEqual(parser.handler('ab', 0, createState()), P.success(1, 'a'));
+		assert.deepStrictEqual(parser.handler('ab', 1, createState()), P.failure());
+	});
+});
+
 describe('first chars', () => {
 	test('str, seq and alt declare the ascii chars they can start with', () => {
 		assert.strictEqual(P.str('ab').firstChars, 'a');
