@@ -12,6 +12,18 @@ const space = P.regexp(/[\u0020\u3000\t]/);
 const alphaAndNum = P.regexp(/[a-z0-9]/i);
 const newLine = P.newline;
 
+/**
+ * Returns true if the UTF-16 code unit can never start an emoji match.
+ * ASCII emoji only start with `#`, `*` or a digit (keycaps), and kana / CJK ideographs are never emoji.
+ * This assumption is checked against `emojiRegex` in test/core.ts.
+ */
+export function cannotStartEmoji(code: number): boolean {
+	if (code < 0x80) {
+		return !(code === 0x23 || code === 0x2a || (code >= 0x30 && code <= 0x39));
+	}
+	return (code >= 0x3041 && code <= 0x30ff) || (code >= 0x4e00 && code <= 0x9fff);
+}
+
 function seqOrText<Parsers extends P.Parser<unknown>[]>(...parsers: Parsers): P.Parser<SeqParseResult<Parsers> | string> {
 	return new P.Parser<SeqParseResult<Parsers> | string>((input, index, state) => {
 		// TODO: typesafe implementation
@@ -80,6 +92,30 @@ function nest<T>(parser: P.Parser<T>, fallback?: P.Parser<string>): P.Parser<T |
 	});
 }
 
+/**
+ * Guards a block syntax that starts with at most `newLines` optional newlines followed by the char `mark`.
+ */
+function block<T>(newLines: number, mark: string, parser: P.Parser<T>): P.Parser<T> {
+	const markCode = mark.charCodeAt(0);
+	return new P.Parser<T>((input, index, state) => {
+		let start = index;
+		for (let i = 0; i < newLines; i++) {
+			const code = input.charCodeAt(start);
+			if (code === 0x0d) {
+				start += (input.charCodeAt(start + 1) === 0x0a) ? 2 : 1;
+			} else if (code === 0x0a) {
+				start++;
+			} else {
+				break;
+			}
+		}
+		if (input.charCodeAt(start) !== markCode) {
+			return P.failure();
+		}
+		return parser.handler(input, index, state);
+	});
+}
+
 interface TypeTable {
 	fullParser: (M.MfmNode | string)[],
 	simpleParser: (M.MfmSimpleNode | string)[],
@@ -129,7 +165,7 @@ export const language = P.createLanguage<TypeTable>({
 			// Regexp
 			r.unicodeEmoji,
 			// "<center>" block
-			P.first('\r\n<', r.centerTag),
+			P.first('\r\n<', block(1, '<', r.centerTag)),
 			// "<small>"
 			P.first('<', r.smallTag),
 			// "<plain>"
@@ -153,13 +189,13 @@ export const language = P.createLanguage<TypeTable>({
 			// "_"
 			P.first('_', r.italicUnder),
 			// "```" block
-			P.first('\r\n`', r.codeBlock),
+			P.first('\r\n`', block(1, '`', r.codeBlock)),
 			// "`"
 			P.first('`', r.inlineCode),
 			// ">" block
-			P.first('\r\n>', r.quote),
+			P.first('\r\n>', block(2, '>', r.quote)),
 			// "\\[" block
-			P.first('\r\n\\', r.mathBlock),
+			P.first('\r\n\\', block(1, '\\', r.mathBlock)),
 			// "\\("
 			P.first('\\', r.mathInline),
 			// "~~"
@@ -478,9 +514,16 @@ export const language = P.createLanguage<TypeTable>({
 
 	unicodeEmoji: () => {
 		const emoji = RegExp(emojiRegex.source);
-		return P.regexp(emoji).map(content => {
+		const parser = P.regexp(emoji).map(content => {
 			// 異体字セレクタ(U+FE0F)の場合は文字として返す
 			return content === '\uFE0F' ? content : M.UNI_EMOJI(content);
+		});
+		// skip the large emoji regexp where no emoji can start
+		return new P.Parser((input, index, state) => {
+			if (cannotStartEmoji(input.charCodeAt(index))) {
+				return P.failure();
+			}
+			return parser.handler(input, index, state);
 		});
 	},
 
@@ -497,13 +540,7 @@ export const language = P.createLanguage<TypeTable>({
 	},
 
 	fn: r => {
-		const fnName = new P.Parser((input, index, state) => {
-			const result = P.regexp(/[a-z0-9_]+/i).handler(input, index, state);
-			if (!result.success) {
-				return result;
-			}
-			return P.success(result.index, result.value);
-		});
+		const fnName = P.regexp(/[a-z0-9_]+/i);
 		const arg: P.Parser<ArgPair> = P.seq(
 			P.regexp(/[a-z0-9_]+/i),
 			P.seq(
@@ -629,10 +666,15 @@ export const language = P.createLanguage<TypeTable>({
 
 	hashtag: () => {
 		const mark = P.str('#');
-		const hashTagChar = P.seq(
-			P.notMatch(P.alt([P.regexp(/[ \u3000\t.,!?'"#:/[\]【】()「」（）<>]/), space, newLine])),
-			P.char,
-		).select(1);
+		// same as `P.seq(P.notMatch(P.alt([P.regexp(/[ \u3000\t.,!?'"#:/[\]【】()「」（）<>]/), space, newLine])), P.char).select(1)`
+		const hashTagStops = ' \u3000\t.,!?\'"#:/[]【】()「」（）<>\r\n';
+		const hashTagChar = new P.Parser<string>((input, index, _state) => {
+			if (index >= input.length) {
+				return P.failure();
+			}
+			const char = input.charAt(index);
+			return hashTagStops.includes(char) ? P.failure() : P.success(index + 1, char);
+		});
 		const innerItem: P.Parser<unknown> = P.lazy(() => P.alt([
 			P.seq(
 				P.str('('), nest(innerItem, hashTagChar).many(0), P.str(')'),
@@ -786,7 +828,7 @@ export const language = P.createLanguage<TypeTable>({
 			P.regexp(/\[(検索|search)\]/i),
 			P.regexp(/(検索|search)/i),
 		]);
-		return P.seq(
+		const parser = P.seq(
 			newLine.option(),
 			P.lineBegin,
 			P.until(P.alt([
@@ -800,6 +842,29 @@ export const language = P.createLanguage<TypeTable>({
 		).map(result => {
 			const query = result[2];
 			return M.SEARCH(query, `${query}${result[3]}${result[4]}`);
+		});
+		// a search block can only start at a line beginning or at a newline right before it
+		return new P.Parser((input, index, state) => {
+			const current = input.charCodeAt(index);
+			const before = input.charCodeAt(index - 1);
+			if (index !== 0 && !P.isNewLineCode(current) && !P.isNewLineCode(before)) {
+				return P.failure();
+			}
+			// the button must be at the end of the line, so the line has to end with `索`, `h` or one of them followed by `]`
+			let lineEnd = index;
+			if (current === 0x0d && input.charCodeAt(index + 1) === 0x0a) {
+				lineEnd += 2;
+			} else if (P.isNewLineCode(current)) {
+				lineEnd++;
+			}
+			while (lineEnd < input.length && !P.isNewLineCode(input.charCodeAt(lineEnd))) {
+				lineEnd++;
+			}
+			const last = input.charCodeAt(input.charCodeAt(lineEnd - 1) === 0x5d ? lineEnd - 2 : lineEnd - 1);
+			if (last !== 0x7d22 && last !== 0x68 && last !== 0x48) {
+				return P.failure();
+			}
+			return parser.handler(input, index, state);
 		});
 	},
 

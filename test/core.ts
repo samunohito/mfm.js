@@ -1,7 +1,8 @@
 import { describe, test, vi } from 'vitest';
 import assert from 'assert';
 import * as P from '../src/internal/core';
-import { language } from '../src/internal/parser';
+import { emojiRegex } from '@misskey-dev/emoji-data';
+import { cannotStartEmoji, language } from '../src/internal/parser';
 import { mergeText } from '../src/internal/util';
 import { TEXT, BOLD, ITALIC } from '../src/index';
 
@@ -153,6 +154,32 @@ describe('nest budget', () => {
 		const result = language.fullParser.handler(input, 0, createState());
 		assert.ok(result.success);
 		assert.deepStrictEqual(mergeText(result.value), [BOLD([ITALIC([TEXT('a')])])]);
+	});
+});
+
+describe('cannotStartEmoji', () => {
+	test('no emoji starts with a code unit it rejects', () => {
+		const re = new RegExp(emojiRegex.source, 'y');
+		// suffixes that can follow the first code unit of an emoji (variation selector, keycap, ZWJ, skin tone, regional indicator)
+		const suffixes = ['', '\uFE0F', '\uFE0F\u20E3', '\u20E3', '\u200D', '\uD83C\uDFFB', '\uD83C\uDDEF'];
+		const violations: string[] = [];
+		for (let code = 0; code < 0x10000; code++) {
+			if (!cannotStartEmoji(code)) continue;
+			for (const suffix of suffixes) {
+				re.lastIndex = 0;
+				if (re.test(String.fromCharCode(code) + suffix)) {
+					violations.push(code.toString(16));
+					break;
+				}
+			}
+		}
+		assert.deepStrictEqual(violations, []);
+	});
+
+	test('keycap bases are not rejected', () => {
+		for (const c of '#*0123456789') {
+			assert.strictEqual(cannotStartEmoji(c.charCodeAt(0)), false);
+		}
 	});
 });
 
