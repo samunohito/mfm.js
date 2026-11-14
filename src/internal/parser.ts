@@ -14,14 +14,76 @@ const newLine = P.newline;
 
 /**
  * Returns true if the UTF-16 code unit can never start an emoji match.
- * ASCII emoji only start with `#`, `*` or a digit (keycaps), and kana / CJK ideographs are never emoji.
+ * Emoji only start with `#`, `*` or a digit (keycaps), `©`, `®`, U+2000..U+2BFF, a few CJK symbols, surrogates or U+FE0F.
  * This assumption is checked against `emojiRegex` in test/core.ts.
  */
 export function cannotStartEmoji(code: number): boolean {
-	if (code < 0x80) {
-		return !(code === 0x23 || code === 0x2a || (code >= 0x30 && code <= 0x39));
+	if (code < 0x2000) {
+		return !(code === 0x23 || code === 0x2a || (code >= 0x30 && code <= 0x39) || code === 0xa9 || code === 0xae);
 	}
-	return (code >= 0x3041 && code <= 0x30ff) || (code >= 0x4e00 && code <= 0x9fff);
+	if (code < 0x2c00) {
+		return false;
+	}
+	if (code < 0xd800) {
+		return !(code === 0x3030 || code === 0x303d || code === 0x3297 || code === 0x3299);
+	}
+	if (code < 0xe000) {
+		return false;
+	}
+	return !(code === 0xe50a || code === 0xfe0f);
+}
+
+/**
+ * Returns true if an ASCII keycap base (`#`, `*` or a digit) followed by the code unit `next` cannot start an emoji match.
+ * This assumption is checked against `emojiRegex` in test/core.ts.
+ */
+export function cannotStartKeycap(next: number): boolean {
+	return next !== 0xfe0f && next !== 0x20e3;
+}
+
+const enum Ascii {
+	// starts or closes a syntax
+	Special = 0,
+	// plain text in any context
+	Plain = 1,
+	// plain text unless a keycap follows
+	Digit = 2,
+	// plain text unless followed by `t` (`http`)
+	H = 3,
+	// plain text unless followed by `[`
+	Question = 4,
+}
+
+const asciiKinds = new Uint8Array(0x80).fill(Ascii.Plain);
+for (const c of '<*_`\\~$@#:[]\r\n') {
+	asciiKinds[c.charCodeAt(0)] = Ascii.Special;
+}
+for (const c of '0123456789') {
+	asciiKinds[c.charCodeAt(0)] = Ascii.Digit;
+}
+asciiKinds[0x68] = Ascii.H;
+asciiKinds[0x3f] = Ascii.Question;
+
+/**
+ * Returns the end of the run of plain text starting at `index`.
+ * A code unit is plain text in any context if it neither starts nor closes any syntax, and it cannot start an emoji.
+ * Newlines are excluded since block syntax can start right after them.
+ */
+function plainTextEnd(input: string, index: number): number {
+	let end = index;
+	for (; end < input.length; end++) {
+		const code = input.charCodeAt(end);
+		if (code >= 0x80) {
+			if (!cannotStartEmoji(code)) break;
+			continue;
+		}
+		const kind = asciiKinds[code];
+		if (kind === Ascii.Plain) continue;
+		if (kind === Ascii.Special) break;
+		const next = input.charCodeAt(end + 1);
+		if (kind === Ascii.Digit ? !cannotStartKeycap(next) : kind === Ascii.H ? next === 0x74 : next === 0x5b) break;
+	}
+	return end;
 }
 
 function seqOrText<Parsers extends P.Parser<unknown>[]>(...parsers: Parsers): P.Parser<SeqParseResult<Parsers> | string> {
@@ -519,7 +581,8 @@ export const language = P.createLanguage<TypeTable>({
 		});
 		// skip the large emoji regexp where no emoji can start
 		return new P.Parser((input, index, state) => {
-			if (cannotStartEmoji(input.charCodeAt(index))) {
+			const code = input.charCodeAt(index);
+			if (cannotStartEmoji(code) || (code < 0x80 && cannotStartKeycap(input.charCodeAt(index + 1)))) {
 				return P.failure();
 			}
 			return parser.handler(input, index, state);
@@ -689,10 +752,33 @@ export const language = P.createLanguage<TypeTable>({
 			),
 			hashTagChar,
 		]));
+		// same as `innerItem` at the top level: a run of `hashTagChar` is consumed at once since the other items cannot start with it
+		const hashTagChars = new P.Parser<string>((input, index, _state) => {
+			let end = index;
+			while (end < input.length && !hashTagStops.includes(input.charAt(end))) {
+				end++;
+			}
+			return (end === index) ? P.failure() : P.success(end, input.slice(index, end));
+		});
+		const topItem: P.Parser<unknown> = P.alt([
+			P.seq(
+				P.str('('), nest(innerItem, hashTagChar).many(0), P.str(')'),
+			),
+			P.seq(
+				P.str('['), nest(innerItem, hashTagChar).many(0), P.str(']'),
+			),
+			P.seq(
+				P.str('「'), nest(innerItem, hashTagChar).many(0), P.str('」'),
+			),
+			P.seq(
+				P.str('（'), nest(innerItem, hashTagChar).many(0), P.str('）'),
+			),
+			hashTagChars,
+		]);
 		const parser = P.seq( 
 			notLinkLabel,
 			mark,
-			innerItem.many(1).text(),
+			topItem.many(1).text(),
 		).select(2);
 		return new P.Parser((input, index, state) => {
 			const result = parser.handler(input, index, state);
@@ -774,10 +860,21 @@ export const language = P.createLanguage<TypeTable>({
 			),
 			urlChar,
 		]));
+		// same as `innerItem` at the top level: a run of `urlChar` is consumed at once since the other items cannot start with it
+		const urlChars = P.regexp(/[.,a-z0-9_/:%#@$&?!~=+-]+/i);
+		const topItem: P.Parser<unknown> = P.alt([
+			P.seq(
+				P.str('('), nest(innerItem, urlChar).many(0), P.str(')'),
+			),
+			P.seq(
+				P.str('['), nest(innerItem, urlChar).many(0), P.str(']'),
+			),
+			urlChars,
+		]);
 		const parser = P.seq(
 			notLinkLabel,
 			P.regexp(/https?:\/\//),
-			innerItem.many(1).text(),
+			topItem.many(1).text(),
 		);
 		return new P.Parser<M.MfmUrl | string>((input, index, state) => {
 			let result;
@@ -867,5 +964,13 @@ export const language = P.createLanguage<TypeTable>({
 		});
 	},
 
-	text: () => P.char,
+	// Every other syntax has already failed at `index`, so the char there is text.
+	// The following plain text code units cannot start or close any syntax either, so they are consumed at once.
+	text: () => new P.Parser((input, index, _state) => {
+		if (index >= input.length) {
+			return P.failure();
+		}
+		const end = P.isNewLineCode(input.charCodeAt(index)) ? index + 1 : plainTextEnd(input, index + 1);
+		return P.success(end, input.slice(index, end));
+	}),
 });

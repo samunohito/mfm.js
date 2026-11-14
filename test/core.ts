@@ -2,7 +2,7 @@ import { describe, test, vi } from 'vitest';
 import assert from 'assert';
 import * as P from '../src/internal/core';
 import { emojiRegex } from '@misskey-dev/emoji-data';
-import { cannotStartEmoji, language } from '../src/internal/parser';
+import { cannotStartEmoji, cannotStartKeycap, language } from '../src/internal/parser';
 import { mergeText } from '../src/internal/util';
 import { TEXT, BOLD, ITALIC } from '../src/index';
 
@@ -180,6 +180,31 @@ describe('cannotStartEmoji', () => {
 		for (const c of '#*0123456789') {
 			assert.strictEqual(cannotStartEmoji(c.charCodeAt(0)), false);
 		}
+	});
+
+	test('no emoji starts with an ascii char followed by a code unit cannotStartKeycap rejects', () => {
+		const re = new RegExp(emojiRegex.source, 'y');
+		const suffixes = ['', '\uFE0F', '\uFE0F\u20E3', '\u20E3', '\u200D', '\uD83C\uDFFB', '\uD83C\uDDEF'];
+		const violations: string[] = [];
+		for (const base of '#*0123456789') {
+			// `0x10000` stands for the end of the input
+			for (let next = 0; next <= 0x10000; next++) {
+				if (!cannotStartKeycap(next === 0x10000 ? NaN : next)) continue;
+				for (const suffix of suffixes) {
+					re.lastIndex = 0;
+					if (re.test(base + (next === 0x10000 ? '' : String.fromCharCode(next) + suffix))) {
+						violations.push(`${base} ${next.toString(16)}`);
+						break;
+					}
+				}
+			}
+		}
+		assert.deepStrictEqual(violations, []);
+	});
+
+	test('keycaps are not rejected', () => {
+		assert.strictEqual(cannotStartKeycap(0xfe0f), false);
+		assert.strictEqual(cannotStartKeycap(0x20e3), false);
 	});
 });
 
