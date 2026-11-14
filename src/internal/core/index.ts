@@ -260,6 +260,18 @@ export function notMatch(parser: Parser<unknown>): Parser<null> {
 	});
 }
 
+/**
+ * Same as `seq(notMatch(stop), parser).select(1)`: matches `parser` unless `stop` matches at the position.
+*/
+export function except<T>(parser: Parser<T>, stop: Parser<unknown>): Parser<T> {
+	return new Parser((input, index, state) => {
+		if (stop.handler(input, index, state).success) {
+			return failure();
+		}
+		return parser.handler(input, index, state);
+	});
+}
+
 function getOrCreate<K, V>(map: Map<K, V>, key: K, create: () => V): V {
 	let value = map.get(key);
 	if (value === undefined) {
@@ -318,7 +330,7 @@ export function until(terminator: Parser<unknown>, min: number): Parser<string> 
  * `item`, `stop` and `after` must depend only on the input, the position and `stateKey`.
 */
 export function manyThen<T, U>(item: Parser<T>, stop: Parser<unknown>, after: Parser<U>, min: number): Parser<[T[], U]> {
-	const element = seq(notMatch(stop), item).select(1);
+	const element = except(item, stop);
 	const parser: Parser<[T[], U]> = new Parser((input, index, state) => {
 		state.manyThenFailures ??= new Map();
 		const byInput = getOrCreate(state.manyThenFailures, parser, () => new Map());
